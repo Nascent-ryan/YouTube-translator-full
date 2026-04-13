@@ -5,7 +5,7 @@ from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from .config import AppConfig
@@ -50,6 +50,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def home() -> HTMLResponse:
         return HTMLResponse(_render_page())
+
+    @app.get("/manifest.webmanifest")
+    async def manifest() -> Response:
+        return Response(_render_manifest(), media_type="application/manifest+json")
+
+    @app.get("/sw.js")
+    async def service_worker() -> Response:
+        return Response(_render_service_worker(), media_type="application/javascript")
+
+    @app.get("/icon.svg")
+    async def icon() -> Response:
+        return Response(_render_icon_svg(), media_type="image/svg+xml")
 
     @app.post("/api/convert")
     async def convert(request: ConvertRequest) -> dict[str, str | None]:
@@ -165,6 +177,13 @@ def _render_page() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>YouTube Translator (Full version)</title>
+  <meta name="theme-color" content="#b14d2f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="YT Translator">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <style>
     :root {
       --bg: #f5efe3;
@@ -460,7 +479,98 @@ def _render_page() -> str:
         convert();
       }
     });
+
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>
 """
+
+
+def _render_manifest() -> str:
+    return """{
+  "name": "YouTube Translator (Full version)",
+  "short_name": "YT Translator",
+  "description": "YouTube 링크를 붙여 넣으면 자막을 정리된 Markdown과 읽기 좋은 한국어 번역 본문으로 보여주는 앱",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5efe3",
+  "theme_color": "#b14d2f",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}"""
+
+
+def _render_service_worker() -> str:
+    return """const CACHE_NAME = "youtube-translator-v1";
+const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") {
+    return;
+  }
+
+  const url = new URL(event.request.url);
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/downloads/")) {
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) {
+        return cached;
+      }
+
+      return fetch(event.request).then((response) => {
+        if (!response || response.status !== 200 || response.type !== "basic") {
+          return response;
+        }
+
+        const responseToCache = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
+        return response;
+      });
+    })
+  );
+});"""
+
+
+def _render_icon_svg() -> str:
+    return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="56" fill="#b14d2f"/>
+  <rect x="36" y="48" width="184" height="160" rx="28" fill="#fff7ed"/>
+  <path d="M107 92h42c20 0 33 14 33 31s-13 31-33 31h-18v26h-24V92zm24 22v18h18c6 0 10-4 10-9s-4-9-10-9h-18z" fill="#7f311b"/>
+  <path d="M84 111l28 17-28 17z" fill="#b14d2f"/>
+</svg>"""
