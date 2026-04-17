@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 
 from .config import AppConfig
 from .services.markdown_exporter_v2 import MarkdownExporter
+from .services.openai_translator import OpenAITranslator
 from .services.original_markdown_builder import OriginalMarkdownBuilder
 from .services.pipeline import GenerationPipeline
 from .services.postprocessor_v2 import PostProcessor
@@ -15,12 +16,20 @@ from .ui.main_window import MainWindow
 
 
 def build_pipeline(config: AppConfig) -> GenerationPipeline:
+    openai_translator = None
+    if config.translation_provider == "openai" and config.openai_api_key:
+        openai_translator = OpenAITranslator(
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+        )
+
     return GenerationPipeline(
         subtitle_downloader=SubtitleDownloader(cookies_path=config.cookies_path),
         vtt_converter=VttConverter(),
         postprocessor=PostProcessor(),
         markdown_exporter=MarkdownExporter(),
         original_markdown_builder=OriginalMarkdownBuilder(),
+        openai_translator=openai_translator,
     )
 
 

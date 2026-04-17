@@ -14,5 +14,9 @@ class SummarizationError(AppError):
     """Raised when LLM summarization fails."""
 
 
+class TranslationError(AppError):
+    """Raised when translation generation fails."""
+
+
 class ExportError(AppError):
     """Raised when writing output fails."""

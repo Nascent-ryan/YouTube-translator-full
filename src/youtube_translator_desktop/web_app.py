@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from .config import AppConfig
 from .services.errors import AppError
 from .services.markdown_exporter_v2 import MarkdownExporter
+from .services.openai_translator import OpenAITranslator
 from .services.original_markdown_builder import OriginalMarkdownBuilder
 from .services.pipeline import GenerationPipeline
 from .services.postprocessor_v2 import PostProcessor
@@ -29,12 +30,20 @@ class WebState:
 
 
 def build_web_pipeline(config: AppConfig) -> GenerationPipeline:
+    openai_translator = None
+    if config.translation_provider == "openai" and config.openai_api_key:
+        openai_translator = OpenAITranslator(
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+        )
+
     return GenerationPipeline(
         subtitle_downloader=SubtitleDownloader(cookies_path=config.cookies_path),
         vtt_converter=VttConverter(),
         postprocessor=PostProcessor(),
         markdown_exporter=MarkdownExporter(),
         original_markdown_builder=OriginalMarkdownBuilder(),
+        openai_translator=openai_translator,
     )
 
 
@@ -81,6 +90,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             "output_name": output_name,
             "original_download_url": f"/downloads/{result.original_output_path.name}" if result.original_output_path else None,
             "original_output_name": result.original_output_path.name if result.original_output_path else None,
+            "warnings": "\n".join(result.warnings) if result.warnings else None,
         }
 
     @app.get("/downloads/{filename}")
