@@ -70,7 +70,8 @@ class SubtitleDownloader:
 
         selected_path = self._find_vtt_path(related_paths)
         if selected_path is None:
-            raise TranscriptError("다운로드된 VTT 자막 파일을 찾지 못했습니다. 영상에 자막이 없을 수 있습니다.")
+            diagnostic = completed.stderr.strip() or completed.stdout.strip()
+            raise TranscriptError(self._build_missing_vtt_error(diagnostic))
 
         return DownloadResult(
             metadata=metadata,
@@ -189,6 +190,12 @@ class SubtitleDownloader:
                 return "쿠키를 사용했지만 로그인 세션이 만료되었거나 이 영상 접근 권한이 부족합니다."
             return "로그인이 필요한 영상입니다. cookies.txt를 연결해 주세요."
         return f"yt-dlp로 자막을 다운로드하지 못했습니다: {stderr.strip()}"
+
+    def _build_missing_vtt_error(self, diagnostic: str) -> str:
+        """Keep yt-dlp's useful diagnosis when it exits without subtitle files."""
+        if diagnostic:
+            return self._build_download_error(diagnostic)
+        return "다운로드된 VTT 자막 파일을 찾지 못했습니다. 자막 언어 또는 YouTube 접근 제한을 확인해 주세요."
 
     def _infer_language(self, payload: dict) -> str | None:
         subtitles = payload.get("subtitles") or {}
