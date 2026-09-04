@@ -79,6 +79,7 @@ class SubtitleDownloader:
         command = [
             *yt_dlp,
             *self._js_runtime_args(),
+            *self._pot_provider_args(),
             "--ignore-no-formats-error",
             "--no-part",
             "--skip-download",
@@ -135,6 +136,7 @@ class SubtitleDownloader:
         command = [
             *yt_dlp,
             *self._js_runtime_args(),
+            *self._pot_provider_args(),
             "--ignore-no-formats-error",
             "--dump-single-json",
             "--skip-download",
@@ -271,6 +273,15 @@ class SubtitleDownloader:
         except (OSError, ValueError):
             return []
         return ["--js-runtimes", f"node:{node}"] if major >= 22 else []
+
+    def _pot_provider_args(self) -> list[str]:
+        base_url = os.getenv("YTDLP_POT_PROVIDER_URL", "").strip().rstrip("/")
+        if not base_url:
+            return []
+        return [
+            "--extractor-args",
+            f"youtubepot-bgutilhttp:base_url={base_url}",
+        ]
 
     def _clean_subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()

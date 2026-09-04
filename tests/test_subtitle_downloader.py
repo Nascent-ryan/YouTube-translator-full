@@ -57,3 +57,13 @@ def test_po_token_error_is_not_reported_as_missing_subtitles() -> None:
 
     assert "PO Token" in message
     assert "자막이 없습니다" not in message
+
+
+def test_pot_provider_url_is_forwarded_to_ytdlp(monkeypatch) -> None:
+    monkeypatch.setenv("YTDLP_POT_PROVIDER_URL", "http://127.0.0.1:4416/")
+    downloader = SubtitleDownloader()
+
+    assert downloader._pot_provider_args() == [
+        "--extractor-args",
+        "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+    ]

@@ -1,4 +1,5 @@
 .env
+.render/
 cookies.txt
 cookies.*.txt
 youtube-cookies.txt
