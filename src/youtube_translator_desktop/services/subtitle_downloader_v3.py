@@ -184,6 +184,11 @@ class SubtitleDownloader:
         if "video unavailable" in lowered:
             return "이 영상을 사용할 수 없습니다. 비공개 또는 지역 제한 영상일 수 있습니다."
         if "requested format is not available" in lowered:
+            if not self.cookies_path or not self.cookies_path.exists():
+                return (
+                    "YouTube 자막 요청이 제한됐고, 서버에서 쿠키 파일을 읽지 못하고 있습니다. "
+                    "Render Secret File과 YTDLP_COOKIES_PATH 설정을 확인해 주세요."
+                )
             return "자막은 받을 수 있지만 YouTube 응답 형식이 불안정합니다. 다시 시도해 주세요."
         if "sign in" in lowered:
             if self.cookies_path and self.cookies_path.exists():

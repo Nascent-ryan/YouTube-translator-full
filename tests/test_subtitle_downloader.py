@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from youtube_translator_desktop.services.subtitle_downloader_v3 import SubtitleDownloader
 
 
@@ -17,6 +19,14 @@ def test_missing_vtt_error_keeps_ytdlp_subtitle_diagnostic() -> None:
     message = downloader._build_missing_vtt_error("WARNING: There are no subtitles for the requested languages")
 
     assert "자막" in message
+
+
+def test_requested_format_error_explains_missing_cookie_file() -> None:
+    downloader = SubtitleDownloader(cookies_path=Path("missing-cookies.txt"))
+
+    message = downloader._build_download_error("ERROR: Requested format is not available")
+
+    assert "쿠키" in message
 
 
 def test_subtitle_downloader_uses_canonical_youtube_url() -> None:

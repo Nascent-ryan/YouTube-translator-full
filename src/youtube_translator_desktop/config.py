@@ -20,10 +20,9 @@ class AppConfig:
         load_dotenv()
 
         output_dir = Path(os.getenv("DEFAULT_OUTPUT_DIR", "outputs")).expanduser()
-        cookies_value = os.getenv(
-            "YTDLP_COOKIES_PATH",
-            str(Path.cwd() / "cookies.txt"),
-        ).strip()
+        render_secret_path = Path("/etc/secrets/youtube-cookies.txt")
+        default_cookies_path = render_secret_path if render_secret_path.exists() else Path.cwd() / "cookies.txt"
+        cookies_value = os.getenv("YTDLP_COOKIES_PATH", str(default_cookies_path)).strip()
         cookies_path = Path(cookies_value).expanduser() if cookies_value else None
         openai_api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
         openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"

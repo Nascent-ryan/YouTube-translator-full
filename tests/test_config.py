@@ -27,3 +27,11 @@ def test_config_prefers_openai_when_api_key_exists(monkeypatch) -> None:
     assert config.openai_api_key == "test-key"
     assert config.openai_model == "gpt-5-mini"
     assert config.translation_provider == "openai"
+
+
+def test_config_uses_explicit_cookie_path(monkeypatch) -> None:
+    monkeypatch.setenv("YTDLP_COOKIES_PATH", "/etc/secrets/youtube-cookies.txt")
+
+    config = AppConfig.load()
+
+    assert config.cookies_path == Path("/etc/secrets/youtube-cookies.txt")
