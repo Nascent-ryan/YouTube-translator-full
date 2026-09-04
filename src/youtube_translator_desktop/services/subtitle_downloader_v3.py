@@ -25,7 +25,7 @@ class DownloadResult:
 
 @dataclass(slots=True)
 class SubtitleDownloader:
-    subtitle_languages: tuple[str, ...] = ("ko", "en", "en-US", "en-GB")
+    subtitle_languages: tuple[str, ...] = ("ko", "en", "en-US", "en-GB", ".*-orig")
     cookies_path: Path | None = None
 
     def download(self, url: str, output_dir: Path) -> DownloadResult:
@@ -36,9 +36,49 @@ class SubtitleDownloader:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         metadata = self._fetch_metadata(yt_dlp, canonical_url, video_id)
-        output_template = str(work_dir / "%(id)s.%(ext)s")
+        has_cookies = bool(self.cookies_path and self.cookies_path.exists())
+        attempts = (True, False) if has_cookies else (False,)
+        diagnostics: list[str] = []
+
+        for use_cookies in attempts:
+            completed = subprocess.run(
+                self._subtitle_command(
+                    yt_dlp=yt_dlp,
+                    canonical_url=canonical_url,
+                    work_dir=work_dir,
+                    use_cookies=use_cookies,
+                ),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._clean_subprocess_env(),
+            )
+            related_paths = sorted(work_dir.glob(f"{video_id}*.vtt"))
+            selected_path = self._find_vtt_path(related_paths)
+            if selected_path is not None:
+                return DownloadResult(
+                    metadata=metadata,
+                    vtt_path=selected_path,
+                    related_vtt_paths=related_paths,
+                )
+
+            mode = "cookies" if use_cookies else "no-cookies"
+            diagnostic = completed.stderr.strip() or completed.stdout.strip()
+            diagnostics.append(f"[{mode}] {diagnostic}".strip())
+
+        raise TranscriptError(self._build_missing_vtt_error("\n\n".join(diagnostics)))
+
+    def _subtitle_command(
+        self,
+        yt_dlp: list[str],
+        canonical_url: str,
+        work_dir: Path,
+        use_cookies: bool,
+    ) -> list[str]:
         command = [
             *yt_dlp,
+            *self._js_runtime_args(),
             "--ignore-no-formats-error",
             "--no-part",
             "--skip-download",
@@ -48,35 +88,15 @@ class SubtitleDownloader:
             ",".join(self.subtitle_languages),
             "--sub-format",
             "vtt",
+            "--sleep-subtitles",
+            "1",
             "--output",
-            output_template,
+            str(work_dir / "%(id)s.%(ext)s"),
         ]
-        if self.cookies_path and self.cookies_path.exists():
+        if use_cookies and self.cookies_path:
             command.extend(["--cookies", str(self.cookies_path)])
         command.append(canonical_url)
-
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=self._clean_subprocess_env(),
-        )
-        related_paths = sorted(work_dir.glob(f"{video_id}*.vtt"))
-        if completed.returncode != 0 and not related_paths:
-            raise TranscriptError(self._build_download_error(completed.stderr or completed.stdout))
-
-        selected_path = self._find_vtt_path(related_paths)
-        if selected_path is None:
-            diagnostic = completed.stderr.strip() or completed.stdout.strip()
-            raise TranscriptError(self._build_missing_vtt_error(diagnostic))
-
-        return DownloadResult(
-            metadata=metadata,
-            vtt_path=selected_path,
-            related_vtt_paths=related_paths,
-        )
+        return command
 
     def _canonical_video_url(self, video_id: str) -> str:
         return f"https://www.youtube.com/watch?v={video_id}"
@@ -114,6 +134,7 @@ class SubtitleDownloader:
     def _fetch_metadata(self, yt_dlp: list[str], url: str, video_id: str) -> VideoMetadata:
         command = [
             *yt_dlp,
+            *self._js_runtime_args(),
             "--ignore-no-formats-error",
             "--dump-single-json",
             "--skip-download",
@@ -179,8 +200,26 @@ class SubtitleDownloader:
             return "시스템 프록시 설정 때문에 YouTube 연결에 실패했습니다."
         if "unable to rename file" in lowered:
             return "OneDrive 또는 Windows가 다운로드 파일 이름 변경을 막고 있습니다."
+        if "http error 429" in lowered or "too many requests" in lowered:
+            return (
+                "YouTube가 현재 서버의 자막 요청을 일시적으로 제한했습니다(HTTP 429). "
+                "Render 공유 IP 제한일 수 있으므로 잠시 후 다시 시도해 주세요."
+            )
+        if "po token" in lowered:
+            return (
+                "YouTube가 서버 자막 요청에 추가 검증(PO Token)을 요구했습니다. "
+                "영상에 자막은 있지만 현재 Render 서버에서는 자막 주소를 사용할 수 없습니다."
+            )
+        if "no subtitles for the requested languages" in lowered:
+            return (
+                "YouTube 응답에서 요청한 언어의 자막 주소를 받지 못했습니다. "
+                "실제 자막 부재가 아니라 서버 접근 제한 또는 원문 언어 코드 변경일 수 있습니다."
+            )
         if "subtitles" in lowered and "not available" in lowered:
-            return "이 영상에는 내려받을 수 있는 자막이 없습니다."
+            return (
+                "YouTube가 이번 요청에 자막 주소를 제공하지 않았습니다. "
+                "영상의 자막 부재보다 서버 접근 제한일 가능성이 큽니다."
+            )
         if "video unavailable" in lowered:
             return "이 영상을 사용할 수 없습니다. 비공개 또는 지역 제한 영상일 수 있습니다."
         if "requested format is not available" in lowered:
@@ -210,6 +249,28 @@ class SubtitleDownloader:
             if preferred in available:
                 return preferred
         return available[0] if available else None
+
+    def _js_runtime_args(self) -> list[str]:
+        deno = shutil.which("deno")
+        if deno:
+            return ["--js-runtimes", f"deno:{deno}"]
+
+        node = shutil.which("node")
+        if not node:
+            return []
+        try:
+            completed = subprocess.run(
+                [node, "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._clean_subprocess_env(),
+            )
+            major = int(completed.stdout.strip().lstrip("v").split(".", 1)[0])
+        except (OSError, ValueError):
+            return []
+        return ["--js-runtimes", f"node:{node}"] if major >= 22 else []
 
     def _clean_subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()

@@ -1,4 +1,7 @@
 .env
+cookies.txt
+cookies.*.txt
+youtube-cookies.txt
 .venv/
 .pytest_cache/
 .pytest_local/
