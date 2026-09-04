@@ -17,3 +17,9 @@ def test_missing_vtt_error_keeps_ytdlp_subtitle_diagnostic() -> None:
     message = downloader._build_missing_vtt_error("WARNING: There are no subtitles for the requested languages")
 
     assert "자막" in message
+
+
+def test_subtitle_downloader_uses_canonical_youtube_url() -> None:
+    downloader = SubtitleDownloader()
+
+    assert downloader._canonical_video_url("dQw4w9WgXcQ") == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"

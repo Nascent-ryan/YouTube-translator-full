@@ -30,11 +30,12 @@ class SubtitleDownloader:
 
     def download(self, url: str, output_dir: Path) -> DownloadResult:
         video_id = extract_video_id(url)
+        canonical_url = self._canonical_video_url(video_id)
         yt_dlp = self._resolve_yt_dlp()
         work_dir = output_dir / "downloads"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        metadata = self._fetch_metadata(yt_dlp, url, video_id)
+        metadata = self._fetch_metadata(yt_dlp, canonical_url, video_id)
         output_template = str(work_dir / "%(id)s.%(ext)s")
         command = [
             *yt_dlp,
@@ -47,14 +48,12 @@ class SubtitleDownloader:
             ",".join(self.subtitle_languages),
             "--sub-format",
             "vtt",
-            "--extractor-args",
-            "youtube:player_client=tv,web_creator",
             "--output",
             output_template,
         ]
         if self.cookies_path and self.cookies_path.exists():
             command.extend(["--cookies", str(self.cookies_path)])
-        command.append(url)
+        command.append(canonical_url)
 
         completed = subprocess.run(
             command,
@@ -78,6 +77,9 @@ class SubtitleDownloader:
             vtt_path=selected_path,
             related_vtt_paths=related_paths,
         )
+
+    def _canonical_video_url(self, video_id: str) -> str:
+        return f"https://www.youtube.com/watch?v={video_id}"
 
     def _resolve_yt_dlp(self) -> list[str]:
         executable = shutil.which("yt-dlp")
@@ -115,8 +117,6 @@ class SubtitleDownloader:
             "--ignore-no-formats-error",
             "--dump-single-json",
             "--skip-download",
-            "--extractor-args",
-            "youtube:player_client=tv,web_creator",
         ]
         if self.cookies_path and self.cookies_path.exists():
             command.extend(["--cookies", str(self.cookies_path)])
