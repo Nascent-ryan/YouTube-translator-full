@@ -9,8 +9,14 @@ from .services.pot_provider import PotProviderProcess
 from .web_app import create_app
 
 
+def _pot_provider_enabled() -> bool:
+    return os.getenv("ENABLE_YTDLP_POT_PROVIDER", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> None:
-    pot_provider = PotProviderProcess.start_if_available()
+    # Browser-assisted captions do not need the local PO-token sidecar. Keeping it
+    # opt-in avoids adding up to 30 seconds to a Render cold start.
+    pot_provider = PotProviderProcess.start_if_available() if _pot_provider_enabled() else None
     config = AppConfig.load()
     app = create_app(config)
     port = int(os.environ.get("PORT", "8000"))
