@@ -28,7 +28,7 @@ class PotProviderProcess:
         port = int(os.getenv("YTDLP_POT_PROVIDER_PORT", "4416"))
         base_url = f"http://127.0.0.1:{port}"
         process = subprocess.Popen(
-            [node, str(script_path), "--port", str(port)],
+            [node, str(script_path), "--host", "127.0.0.1", "--port", str(port)],
             text=True,
             env=os.environ.copy(),
         )
@@ -43,7 +43,7 @@ class PotProviderProcess:
         if configured:
             return Path(configured).expanduser()
 
-        version = os.getenv("BGUTIL_PROVIDER_VERSION", "1.3.2").strip() or "1.3.2"
+        version = os.getenv("BGUTIL_PROVIDER_VERSION", "2.0.0").strip() or "2.0.0"
         return Path.cwd() / ".render" / f"bgutil-ytdlp-pot-provider-{version}" / "server" / "build" / "main.js"
 
     def _wait_until_ready(self, timeout_seconds: float = 30.0) -> None:

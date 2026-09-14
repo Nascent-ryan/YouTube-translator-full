@@ -5,12 +5,12 @@ from youtube_translator_desktop.services.pot_provider import PotProviderProcess
 
 def test_provider_script_path_uses_render_build_location(monkeypatch) -> None:
     monkeypatch.delenv("YTDLP_POT_PROVIDER_SCRIPT", raising=False)
-    monkeypatch.setenv("BGUTIL_PROVIDER_VERSION", "1.3.2")
+    monkeypatch.delenv("BGUTIL_PROVIDER_VERSION", raising=False)
 
     assert PotProviderProcess._script_path() == (
         Path.cwd()
         / ".render"
-        / "bgutil-ytdlp-pot-provider-1.3.2"
+        / "bgutil-ytdlp-pot-provider-2.0.0"
         / "server"
         / "build"
         / "main.js"

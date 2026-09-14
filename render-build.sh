@@ -4,7 +4,7 @@ set -euo pipefail
 python -m pip install --upgrade --no-cache-dir yt-dlp
 python -m pip install --no-cache-dir -e .
 
-provider_version="${BGUTIL_PROVIDER_VERSION:-1.3.2}"
+provider_version="${BGUTIL_PROVIDER_VERSION:-2.0.0}"
 provider_root=".render/bgutil-ytdlp-pot-provider-${provider_version}"
 
 if [[ ! -d "${provider_root}/.git" ]]; then
