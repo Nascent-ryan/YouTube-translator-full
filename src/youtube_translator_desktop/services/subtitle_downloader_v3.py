@@ -27,6 +27,7 @@ class DownloadResult:
 class SubtitleDownloader:
     subtitle_languages: tuple[str, ...] = ("ko", "en", "en-US", "en-GB", ".*-orig")
     cookies_path: Path | None = None
+    proxy_url: str | None = None
 
     def download(self, url: str, output_dir: Path) -> DownloadResult:
         video_id = extract_video_id(url)
@@ -47,6 +48,7 @@ class SubtitleDownloader:
                     canonical_url=canonical_url,
                     work_dir=work_dir,
                     use_cookies=use_cookies,
+                    subtitle_language=metadata.language_code,
                 ),
                 capture_output=True,
                 text=True,
@@ -66,6 +68,8 @@ class SubtitleDownloader:
             mode = "cookies" if use_cookies else "no-cookies"
             diagnostic = completed.stderr.strip() or completed.stdout.strip()
             diagnostics.append(f"[{mode}] {diagnostic}".strip())
+            if self._is_rate_limited(diagnostic):
+                break
 
         raise TranscriptError(self._build_missing_vtt_error("\n\n".join(diagnostics)))
 
@@ -75,18 +79,20 @@ class SubtitleDownloader:
         canonical_url: str,
         work_dir: Path,
         use_cookies: bool,
+        subtitle_language: str | None,
     ) -> list[str]:
         command = [
             *yt_dlp,
             *self._js_runtime_args(),
             *self._pot_provider_args(),
+            *self._proxy_args(),
             "--ignore-no-formats-error",
             "--no-part",
             "--skip-download",
             "--write-auto-subs",
             "--write-subs",
             "--sub-langs",
-            ",".join(self.subtitle_languages),
+            subtitle_language or ".*-orig",
             "--sub-format",
             "vtt",
             "--sleep-subtitles",
@@ -137,6 +143,7 @@ class SubtitleDownloader:
             *yt_dlp,
             *self._js_runtime_args(),
             *self._pot_provider_args(),
+            *self._proxy_args(),
             "--ignore-no-formats-error",
             "--dump-single-json",
             "--skip-download",
@@ -205,7 +212,7 @@ class SubtitleDownloader:
         if "http error 429" in lowered or "too many requests" in lowered:
             return (
                 "YouTube가 현재 서버의 자막 요청을 일시적으로 제한했습니다(HTTP 429). "
-                "Render 공유 IP 제한일 수 있으므로 잠시 후 다시 시도해 주세요."
+                "Render 공유 IP 제한이므로 잠시 후 다시 시도하거나 서버에 YTDLP_PROXY_URL을 설정해 주세요."
             )
         if "po token" in lowered:
             return (
@@ -246,11 +253,29 @@ class SubtitleDownloader:
     def _infer_language(self, payload: dict) -> str | None:
         subtitles = payload.get("subtitles") or {}
         automatic = payload.get("automatic_captions") or {}
-        available = list(subtitles.keys()) + list(automatic.keys())
-        for preferred in self.subtitle_languages:
-            if preferred in available:
-                return preferred
-        return available[0] if available else None
+        subtitle_languages = list(subtitles.keys())
+        automatic_languages = list(automatic.keys())
+        declared_language = str(payload.get("language") or "").strip()
+
+        # Prefer creator-provided captions matching the video's source language.
+        if declared_language:
+            for language in subtitle_languages:
+                if language == declared_language or language.startswith(f"{declared_language}-"):
+                    return language
+
+        if subtitle_languages:
+            return subtitle_languages[0]
+
+        for language in automatic_languages:
+            if language.endswith("-orig"):
+                return language
+
+        if declared_language:
+            for language in automatic_languages:
+                if language == declared_language or language.startswith(f"{declared_language}-"):
+                    return language
+
+        return automatic_languages[0] if automatic_languages else None
 
     def _js_runtime_args(self) -> list[str]:
         deno = shutil.which("deno")
@@ -282,6 +307,14 @@ class SubtitleDownloader:
             "--extractor-args",
             f"youtubepot-bgutilhttp:base_url={base_url}",
         ]
+
+    def _proxy_args(self) -> list[str]:
+        proxy_url = (self.proxy_url or "").strip()
+        return ["--proxy", proxy_url] if proxy_url else []
+
+    def _is_rate_limited(self, diagnostic: str) -> bool:
+        lowered = diagnostic.lower()
+        return "http error 429" in lowered or "too many requests" in lowered
 
     def _clean_subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()

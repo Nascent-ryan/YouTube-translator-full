@@ -35,3 +35,11 @@ def test_config_uses_explicit_cookie_path(monkeypatch) -> None:
     config = AppConfig.load()
 
     assert config.cookies_path == Path("/etc/secrets/youtube-cookies.txt")
+
+
+def test_config_loads_ytdlp_proxy_url(monkeypatch) -> None:
+    monkeypatch.setenv("YTDLP_PROXY_URL", "http://proxy.example:8080")
+
+    config = AppConfig.load()
+
+    assert config.ytdlp_proxy_url == "http://proxy.example:8080"

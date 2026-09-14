@@ -38,7 +38,10 @@ def build_web_pipeline(config: AppConfig) -> GenerationPipeline:
         )
 
     return GenerationPipeline(
-        subtitle_downloader=SubtitleDownloader(cookies_path=config.cookies_path),
+        subtitle_downloader=SubtitleDownloader(
+            cookies_path=config.cookies_path,
+            proxy_url=config.ytdlp_proxy_url,
+        ),
         vtt_converter=VttConverter(),
         postprocessor=PostProcessor(),
         markdown_exporter=MarkdownExporter(),

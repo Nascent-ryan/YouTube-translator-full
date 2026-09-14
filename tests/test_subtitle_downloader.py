@@ -67,3 +67,40 @@ def test_pot_provider_url_is_forwarded_to_ytdlp(monkeypatch) -> None:
         "--extractor-args",
         "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
     ]
+
+
+def test_creator_caption_matching_source_language_is_preferred() -> None:
+    downloader = SubtitleDownloader()
+
+    language = downloader._infer_language(
+        {
+            "language": "en",
+            "subtitles": {"en-US": [{}]},
+            "automatic_captions": {"ko": [{}], "en-orig": [{}]},
+        }
+    )
+
+    assert language == "en-US"
+
+
+def test_original_automatic_caption_is_preferred_over_translation() -> None:
+    downloader = SubtitleDownloader()
+
+    language = downloader._infer_language(
+        {
+            "language": "en",
+            "subtitles": {},
+            "automatic_captions": {"ko": [{}], "en-orig": [{}], "en": [{}]},
+        }
+    )
+
+    assert language == "en-orig"
+
+
+def test_proxy_url_is_forwarded_to_ytdlp() -> None:
+    downloader = SubtitleDownloader(proxy_url="http://user:pass@proxy.example:8080")
+
+    assert downloader._proxy_args() == [
+        "--proxy",
+        "http://user:pass@proxy.example:8080",
+    ]

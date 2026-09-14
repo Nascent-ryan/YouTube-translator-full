@@ -14,6 +14,7 @@ class AppConfig:
     openai_api_key: str | None = None
     openai_model: str = "gpt-5-mini"
     translation_provider: str = "youtube"
+    ytdlp_proxy_url: str | None = None
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -28,6 +29,7 @@ class AppConfig:
         openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
         provider_value = os.getenv("TRANSLATION_PROVIDER", "").strip().lower()
         translation_provider = provider_value or ("openai" if openai_api_key else "youtube")
+        ytdlp_proxy_url = os.getenv("YTDLP_PROXY_URL", "").strip() or None
 
         return cls(
             default_output_dir=output_dir,
@@ -35,4 +37,5 @@ class AppConfig:
             openai_api_key=openai_api_key,
             openai_model=openai_model,
             translation_provider=translation_provider,
+            ytdlp_proxy_url=ytdlp_proxy_url,
         )

@@ -22,6 +22,9 @@ copy .env.example .env
 
 `.env`에 `OPENAI_API_KEY`를 채워 주세요.
 
+Render 등 공유 서버에서 YouTube가 `HTTP 429`를 반환한다면, 신뢰할 수 있는 프록시 주소를
+`YTDLP_PROXY_URL` 환경변수에 설정할 수 있습니다. 예: `http://user:password@host:port`.
+
 ## 실행
 
 ```bash
