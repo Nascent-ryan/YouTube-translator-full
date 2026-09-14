@@ -9,7 +9,7 @@ from .markdown_exporter_v2 import MarkdownExporter
 from .openai_translator import OpenAITranslator
 from .original_markdown_builder import OriginalMarkdownBuilder
 from .postprocessor_v2 import PostProcessor
-from .subtitle_downloader_v3 import SubtitleDownloader
+from .subtitle_downloader_v3 import DownloadResult, SubtitleDownloader
 from .vtt_converter_v13 import VttConverter
 
 
@@ -24,6 +24,9 @@ class GenerationPipeline:
 
     def run(self, url: str, output_dir: Path) -> GenerationResult:
         download_result = self.subtitle_downloader.download(url, output_dir)
+        return self.run_download_result(download_result, output_dir)
+
+    def run_download_result(self, download_result: DownloadResult, output_dir: Path) -> GenerationResult:
         warnings: list[str] = []
         conversion_source = download_result
         if self.openai_translator and self.openai_translator.is_enabled():

@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from urllib.request import urlopen
 
 from youtube_translator_desktop.models import VideoMetadata
@@ -24,10 +24,44 @@ class DownloadResult:
 
 
 @dataclass(slots=True)
+class BrowserSubtitleSource:
+    metadata: VideoMetadata
+    subtitle_url: str
+    subtitle_format: str
+
+
+@dataclass(slots=True)
 class SubtitleDownloader:
     subtitle_languages: tuple[str, ...] = ("ko", "en", "en-US", "en-GB", ".*-orig")
     cookies_path: Path | None = None
     proxy_url: str | None = None
+
+    def prepare_browser_download(self, url: str) -> BrowserSubtitleSource:
+        """Resolve one source-language VTT without downloading it on the server."""
+        video_id = extract_video_id(url)
+        canonical_url = self._canonical_video_url(video_id)
+        yt_dlp = self._resolve_yt_dlp()
+        payload, diagnostic = self._fetch_info_payload(yt_dlp, canonical_url)
+        if payload is None:
+            raise TranscriptError(self._build_missing_vtt_error(diagnostic))
+
+        metadata = self._metadata_from_payload(payload, canonical_url, video_id)
+        track = self._select_browser_vtt(payload, metadata.language_code)
+        if track is None:
+            raise TranscriptError(
+                "YouTube 응답에서 브라우저로 받을 수 있는 VTT 자막 주소를 찾지 못했습니다. "
+                "영상의 자막 설정 또는 서버 접근 제한을 확인해 주세요."
+            )
+
+        subtitle_url = str(track.get("url") or "").strip()
+        if not self._is_youtube_subtitle_url(subtitle_url):
+            raise TranscriptError("YouTube가 안전하게 전달할 수 있는 자막 주소를 제공하지 않았습니다.")
+
+        return BrowserSubtitleSource(
+            metadata=metadata,
+            subtitle_url=subtitle_url,
+            subtitle_format="vtt",
+        )
 
     def download(self, url: str, output_dir: Path) -> DownloadResult:
         video_id = extract_video_id(url)
@@ -139,35 +173,13 @@ class SubtitleDownloader:
         return completed.returncode == 0
 
     def _fetch_metadata(self, yt_dlp: list[str], url: str, video_id: str) -> VideoMetadata:
-        command = [
-            *yt_dlp,
-            *self._js_runtime_args(),
-            *self._pot_provider_args(),
-            *self._proxy_args(),
-            "--ignore-no-formats-error",
-            "--dump-single-json",
-            "--skip-download",
-        ]
-        if self.cookies_path and self.cookies_path.exists():
-            command.extend(["--cookies", str(self.cookies_path)])
-        command.append(url)
-
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=self._clean_subprocess_env(),
-        )
-        if completed.returncode != 0:
+        payload, _ = self._fetch_info_payload(yt_dlp, url)
+        if payload is None:
             return self._fetch_oembed_metadata(url, video_id)
 
-        try:
-            payload = json.loads(completed.stdout)
-        except json.JSONDecodeError:
-            return self._fetch_oembed_metadata(url, video_id)
+        return self._metadata_from_payload(payload, url, video_id)
 
+    def _metadata_from_payload(self, payload: dict, url: str, video_id: str) -> VideoMetadata:
         return VideoMetadata(
             video_id=video_id,
             url=url,
@@ -175,6 +187,49 @@ class SubtitleDownloader:
             channel_name=payload.get("channel") or payload.get("uploader"),
             language_code=self._infer_language(payload),
         )
+
+    def _fetch_info_payload(self, yt_dlp: list[str], url: str) -> tuple[dict | None, str]:
+        has_cookies = bool(self.cookies_path and self.cookies_path.exists())
+        attempts = (True, False) if has_cookies else (False,)
+        diagnostics: list[str] = []
+
+        for use_cookies in attempts:
+            command = [
+                *yt_dlp,
+                *self._js_runtime_args(),
+                *self._pot_provider_args(),
+                *self._proxy_args(),
+                "--ignore-no-formats-error",
+                "--dump-single-json",
+                "--skip-download",
+            ]
+            if use_cookies and self.cookies_path:
+                command.extend(["--cookies", str(self.cookies_path)])
+            command.append(url)
+
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._clean_subprocess_env(),
+            )
+            if completed.returncode == 0:
+                try:
+                    payload = json.loads(completed.stdout)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    return payload, ""
+
+            mode = "cookies" if use_cookies else "no-cookies"
+            diagnostic = completed.stderr.strip() or completed.stdout.strip()
+            diagnostics.append(f"[{mode}] {diagnostic}".strip())
+            if self._is_rate_limited(diagnostic):
+                break
+
+        return None, "\n\n".join(diagnostics)
 
     def _fetch_oembed_metadata(self, url: str, video_id: str) -> VideoMetadata:
         oembed_url = f"https://www.youtube.com/oembed?url={quote_plus(url)}&format=json"
@@ -276,6 +331,37 @@ class SubtitleDownloader:
                     return language
 
         return automatic_languages[0] if automatic_languages else None
+
+    def _select_browser_vtt(self, payload: dict, language_code: str | None) -> dict | None:
+        subtitles = payload.get("subtitles") or {}
+        automatic = payload.get("automatic_captions") or {}
+        catalogs = (subtitles, automatic)
+
+        if language_code:
+            for catalog in catalogs:
+                selected = self._find_vtt_track(catalog.get(language_code) or [])
+                if selected:
+                    return selected
+
+        for catalog in catalogs:
+            for tracks in catalog.values():
+                selected = self._find_vtt_track(tracks or [])
+                if selected:
+                    return selected
+        return None
+
+    def _find_vtt_track(self, tracks: list[dict]) -> dict | None:
+        return next((track for track in tracks if track.get("ext") == "vtt" and track.get("url")), None)
+
+    def _is_youtube_subtitle_url(self, url: str) -> bool:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        return parsed.scheme == "https" and (
+            host == "youtube.com"
+            or host.endswith(".youtube.com")
+            or host == "googlevideo.com"
+            or host.endswith(".googlevideo.com")
+        )
 
     def _js_runtime_args(self) -> list[str]:
         deno = shutil.which("deno")

@@ -104,3 +104,28 @@ def test_proxy_url_is_forwarded_to_ytdlp() -> None:
         "--proxy",
         "http://user:pass@proxy.example:8080",
     ]
+
+
+def test_browser_download_selects_vtt_for_inferred_language() -> None:
+    downloader = SubtitleDownloader()
+    payload = {
+        "subtitles": {
+            "en-US": [
+                {"ext": "json3", "url": "https://www.youtube.com/api/timedtext?fmt=json3"},
+                {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?fmt=vtt"},
+            ]
+        },
+        "automatic_captions": {"ko": [{"ext": "vtt", "url": "https://example.com/ko.vtt"}]},
+    }
+
+    selected = downloader._select_browser_vtt(payload, "en-US")
+
+    assert selected == {"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?fmt=vtt"}
+
+
+def test_browser_download_only_accepts_youtube_subtitle_hosts() -> None:
+    downloader = SubtitleDownloader()
+
+    assert downloader._is_youtube_subtitle_url("https://www.youtube.com/api/timedtext?id=sample")
+    assert downloader._is_youtube_subtitle_url("https://sub.googlevideo.com/timedtext?id=sample")
+    assert not downloader._is_youtube_subtitle_url("https://example.com/subtitle.vtt")

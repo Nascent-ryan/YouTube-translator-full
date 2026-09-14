@@ -1,26 +1,41 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import AppConfig
+from .models import GenerationResult, VideoMetadata
 from .services.errors import AppError
 from .services.markdown_exporter_v2 import MarkdownExporter
 from .services.openai_translator import OpenAITranslator
 from .services.original_markdown_builder import OriginalMarkdownBuilder
 from .services.pipeline import GenerationPipeline
 from .services.postprocessor_v2 import PostProcessor
-from .services.subtitle_downloader_v3 import SubtitleDownloader
+from .services.subtitle_downloader_v3 import DownloadResult, SubtitleDownloader
+from .services.url_utils import extract_video_id
 from .services.vtt_converter_v13 import VttConverter
 
 
+MAX_VTT_CHARS = 6_000_000
+
+
 class ConvertRequest(BaseModel):
-    url: str
+    url: str = Field(max_length=2048)
+
+
+class BrowserVttRequest(BaseModel):
+    url: str = Field(max_length=2048)
+    video_id: str = Field(min_length=11, max_length=11)
+    title: str = Field(max_length=500)
+    channel: str | None = Field(default=None, max_length=300)
+    language_code: str | None = Field(default=None, max_length=50)
+    vtt_text: str = Field(min_length=1, max_length=MAX_VTT_CHARS)
 
 
 @dataclass(slots=True)
@@ -83,18 +98,64 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         except AppError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        output_name = result.output_path.name
+        return _serialize_result(result)
+
+    @app.post("/api/prepare")
+    async def prepare(request: ConvertRequest, response: Response) -> dict[str, str | None]:
+        state: WebState = app.state.web_state
+        try:
+            source = state.pipeline.subtitle_downloader.prepare_browser_download(request.url.strip())
+        except AppError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        response.headers["Cache-Control"] = "no-store"
         return {
-            "title": result.subtitle_document.metadata.title,
-            "channel": result.subtitle_document.metadata.channel_name or "정보 없음",
-            "markdown": result.markdown_text,
-            "rendered_html": render_markdown_html(result.markdown_text),
-            "download_url": f"/downloads/{output_name}",
-            "output_name": output_name,
-            "original_download_url": f"/downloads/{result.original_output_path.name}" if result.original_output_path else None,
-            "original_output_name": result.original_output_path.name if result.original_output_path else None,
-            "warnings": "\n".join(result.warnings) if result.warnings else None,
+            "video_id": source.metadata.video_id,
+            "url": source.metadata.url,
+            "title": source.metadata.title,
+            "channel": source.metadata.channel_name,
+            "language_code": source.metadata.language_code,
+            "subtitle_url": source.subtitle_url,
+            "subtitle_format": source.subtitle_format,
         }
+
+    @app.post("/api/convert-vtt")
+    async def convert_browser_vtt(request: BrowserVttRequest) -> dict[str, str | None]:
+        state: WebState = app.state.web_state
+        try:
+            video_id = extract_video_id(request.url)
+            if request.video_id != video_id:
+                raise HTTPException(status_code=400, detail="영상 주소와 자막 정보가 일치하지 않습니다.")
+
+            normalized_vtt = request.vtt_text.lstrip("\ufeff")
+            if not normalized_vtt.lstrip().startswith("WEBVTT"):
+                raise HTTPException(status_code=400, detail="YouTube에서 받은 자막이 VTT 형식이 아닙니다.")
+
+            language_code = _safe_language_code(request.language_code)
+            work_dir = state.output_dir / "downloads"
+            work_dir.mkdir(parents=True, exist_ok=True)
+            vtt_path = work_dir / f"{video_id}.{language_code}.browser.vtt"
+            vtt_path.write_text(normalized_vtt, encoding="utf-8")
+            download_result = DownloadResult(
+                metadata=VideoMetadata(
+                    video_id=video_id,
+                    url=request.url,
+                    title=request.title.strip() or f"YouTube Video ({video_id})",
+                    channel_name=(request.channel or "").strip() or None,
+                    language_code=request.language_code,
+                ),
+                vtt_path=vtt_path,
+                related_vtt_paths=[vtt_path],
+            )
+            result = state.pipeline.run_download_result(download_result, state.output_dir)
+        except HTTPException:
+            raise
+        except AppError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="브라우저에서 받은 자막을 저장하지 못했습니다.") from exc
+
+        return _serialize_result(result)
 
     @app.get("/downloads/{filename}")
     async def download_file(filename: str) -> FileResponse:
@@ -105,6 +166,26 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return FileResponse(file_path, media_type="text/markdown; charset=utf-8", filename=safe_name)
 
     return app
+
+
+def _safe_language_code(language_code: str | None) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", language_code or "source").strip("-")
+    return normalized or "source"
+
+
+def _serialize_result(result: GenerationResult) -> dict[str, str | None]:
+    output_name = result.output_path.name
+    return {
+        "title": result.subtitle_document.metadata.title,
+        "channel": result.subtitle_document.metadata.channel_name or "정보 없음",
+        "markdown": result.markdown_text,
+        "rendered_html": render_markdown_html(result.markdown_text),
+        "download_url": f"/downloads/{output_name}",
+        "output_name": output_name,
+        "original_download_url": f"/downloads/{result.original_output_path.name}" if result.original_output_path else None,
+        "original_output_name": result.original_output_path.name if result.original_output_path else None,
+        "warnings": "\n".join(result.warnings) if result.warnings else None,
+    }
 
 
 def render_markdown_html(markdown_text: str) -> str:
@@ -435,6 +516,62 @@ def _render_page() -> str:
     const downloadLink = document.getElementById("download-link");
     const originalDownloadLink = document.getElementById("original-download-link");
 
+    async function postJson(path, body) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "요청 처리에 실패했습니다.");
+      }
+      return payload;
+    }
+
+    async function downloadSubtitleInBrowser(source) {
+      let response;
+      try {
+        response = await fetch(source.subtitle_url, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store",
+        });
+      } catch (error) {
+        throw new Error("브라우저에서 YouTube 자막을 받지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.");
+      }
+
+      if (response.status === 429) {
+        throw new Error("현재 사용 중인 네트워크에서 YouTube 자막 요청이 잠시 제한됐습니다. 잠시 후 다시 시도해 주세요.");
+      }
+      if (!response.ok) {
+        throw new Error(`YouTube 자막 다운로드에 실패했습니다(HTTP ${response.status}).`);
+      }
+
+      const vttText = await response.text();
+      if (vttText.length > 6000000) {
+        throw new Error("자막 파일이 너무 커서 처리할 수 없습니다.");
+      }
+      if (!vttText.replace(/^\uFEFF/, "").trimStart().startsWith("WEBVTT")) {
+        throw new Error("YouTube가 예상과 다른 자막 형식을 반환했습니다. 다시 시도해 주세요.");
+      }
+      return vttText;
+    }
+
+    function showMetadata(payload) {
+      const values = [
+        `제목: ${payload.title}`,
+        `채널: ${payload.channel}`,
+        `파일: ${payload.output_name}`,
+      ];
+      metaNode.replaceChildren(...values.map((value) => {
+        const span = document.createElement("span");
+        span.textContent = value;
+        return span;
+      }));
+    }
+
     async function convert() {
       const url = urlInput.value.trim();
       if (!url) {
@@ -450,23 +587,25 @@ def _render_page() -> str:
       originalDownloadLink.hidden = true;
 
       try {
-        const response = await fetch("/api/convert", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url }),
+        statusNode.textContent = "영상의 자막 정보를 확인하고 있습니다.";
+        const source = await postJson("/api/prepare", { url });
+
+        statusNode.textContent = "현재 브라우저에서 YouTube 자막을 받고 있습니다.";
+        const vttText = await downloadSubtitleInBrowser(source);
+
+        statusNode.textContent = "자막을 한국어로 번역하고 주제별로 정리하고 있습니다.";
+        const payload = await postJson("/api/convert-vtt", {
+          url: source.url,
+          video_id: source.video_id,
+          title: source.title,
+          channel: source.channel,
+          language_code: source.language_code,
+          vtt_text: vttText,
         });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.detail || "변환에 실패했습니다.");
-        }
 
         renderedNode.innerHTML = payload.rendered_html;
         rawMarkdownNode.textContent = payload.markdown;
-        metaNode.innerHTML = `
-          <span>제목: ${payload.title}</span>
-          <span>채널: ${payload.channel}</span>
-          <span>파일: ${payload.output_name}</span>
-        `;
+        showMetadata(payload);
         downloadLink.href = payload.download_url;
         downloadLink.hidden = false;
         if (payload.original_download_url) {
@@ -476,7 +615,9 @@ def _render_page() -> str:
           originalDownloadLink.hidden = true;
         }
         resultCard.classList.add("visible");
-        statusNode.textContent = "변환이 완료되었습니다.";
+        statusNode.textContent = payload.warnings
+          ? `변환이 완료되었지만 일부 기능을 건너뛰었습니다: ${payload.warnings}`
+          : "변환이 완료되었습니다.";
         statusNode.className = "status success";
       } catch (error) {
         statusNode.textContent = error.message || "변환 중 오류가 발생했습니다.";
@@ -527,7 +668,7 @@ def _render_manifest() -> str:
 
 
 def _render_service_worker() -> str:
-    return """const CACHE_NAME = "youtube-translator-v1";
+    return """const CACHE_NAME = "youtube-translator-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -561,12 +702,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-
-      return fetch(event.request).then((response) => {
+    fetch(event.request).then((response) => {
         if (!response || response.status !== 200 || response.type !== "basic") {
           return response;
         }
@@ -574,8 +710,7 @@ self.addEventListener("fetch", (event) => {
         const responseToCache = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
         return response;
-      });
-    })
+      }).catch(() => caches.match(event.request))
   );
 });"""
 
