@@ -529,6 +529,107 @@ def _render_page() -> str:
       return payload;
     }
 
+    function extractVideoId(value) {
+      let parsed;
+      try {
+        parsed = new URL(value);
+      } catch (error) {
+        throw new Error("올바른 YouTube 링크를 입력해 주세요.");
+      }
+
+      const host = parsed.hostname.toLowerCase();
+      let videoId = "";
+      if (host === "youtu.be") {
+        videoId = parsed.pathname.split("/").filter(Boolean)[0] || "";
+      } else if (["youtube.com", "www.youtube.com", "m.youtube.com"].includes(host)) {
+        if (parsed.pathname === "/watch") {
+          videoId = parsed.searchParams.get("v") || "";
+        } else {
+          const parts = parsed.pathname.split("/").filter(Boolean);
+          if (["shorts", "embed"].includes(parts[0])) {
+            videoId = parts[1] || "";
+          }
+        }
+      }
+
+      if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        throw new Error("YouTube 영상 ID를 확인할 수 없습니다.");
+      }
+      return videoId;
+    }
+
+    async function prepareSubtitleInBrowser(value) {
+      const videoId = extractVideoId(value);
+      const client = {
+        clientName: "ANDROID",
+        clientVersion: "21.26.364",
+        androidSdkVersion: 30,
+        osName: "Android",
+        osVersion: "11",
+        hl: "en",
+        gl: "US",
+      };
+
+      let response;
+      try {
+        response = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+          method: "POST",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store",
+          referrerPolicy: "no-referrer",
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          body: JSON.stringify({ context: { client }, videoId }),
+        });
+      } catch (error) {
+        throw new Error("브라우저에서 YouTube 영상 정보를 확인하지 못했습니다. 네트워크 연결을 확인해 주세요.");
+      }
+
+      if (!response.ok) {
+        throw new Error(`YouTube 영상 정보 요청에 실패했습니다(HTTP ${response.status}).`);
+      }
+
+      const player = await response.json();
+      const playability = player.playabilityStatus || {};
+      if (playability.status !== "OK") {
+        const reason = playability.reason || "이 영상을 현재 사용할 수 없습니다.";
+        throw new Error(`YouTube 영상 확인 실패: ${reason}`);
+      }
+
+      const renderer = player.captions?.playerCaptionsTracklistRenderer;
+      const tracks = renderer?.captionTracks || [];
+      if (!tracks.length) {
+        throw new Error("이 영상에는 사용할 수 있는 자막 트랙이 없습니다.");
+      }
+
+      const defaultIndex = (renderer.audioTracks || [])
+        .map((audioTrack) => audioTrack.defaultCaptionTrackIndex)
+        .find((index) => Number.isInteger(index) && tracks[index]);
+      const track = tracks[defaultIndex] || tracks.find((candidate) => candidate.kind !== "asr") || tracks[0];
+      if (!track?.baseUrl) {
+        throw new Error("YouTube 응답에서 자막 주소를 찾지 못했습니다.");
+      }
+
+      const subtitleUrl = new URL(track.baseUrl);
+      const subtitleHost = subtitleUrl.hostname.toLowerCase();
+      if (!(subtitleHost === "youtube.com" || subtitleHost.endsWith(".youtube.com")
+          || subtitleHost === "googlevideo.com" || subtitleHost.endsWith(".googlevideo.com"))) {
+        throw new Error("YouTube가 안전하게 사용할 수 있는 자막 주소를 제공하지 않았습니다.");
+      }
+      subtitleUrl.searchParams.set("fmt", "vtt");
+
+      const details = player.videoDetails || {};
+      return {
+        video_id: videoId,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        title: details.title || `YouTube Video (${videoId})`,
+        channel: details.author || null,
+        language_code: track.languageCode || null,
+        subtitle_url: subtitleUrl.toString(),
+        subtitle_format: "vtt",
+      };
+    }
+
     async function downloadSubtitleInBrowser(source) {
       let response;
       try {
@@ -537,6 +638,7 @@ def _render_page() -> str:
           mode: "cors",
           credentials: "omit",
           cache: "no-store",
+          referrerPolicy: "no-referrer",
         });
       } catch (error) {
         throw new Error("브라우저에서 YouTube 자막을 받지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.");
@@ -587,8 +689,8 @@ def _render_page() -> str:
       originalDownloadLink.hidden = true;
 
       try {
-        statusNode.textContent = "영상의 자막 정보를 확인하고 있습니다.";
-        const source = await postJson("/api/prepare", { url });
+        statusNode.textContent = "현재 브라우저에서 영상과 자막 정보를 확인하고 있습니다.";
+        const source = await prepareSubtitleInBrowser(url);
 
         statusNode.textContent = "현재 브라우저에서 YouTube 자막을 받고 있습니다.";
         const vttText = await downloadSubtitleInBrowser(source);
@@ -668,7 +770,7 @@ def _render_manifest() -> str:
 
 
 def _render_service_worker() -> str:
-    return """const CACHE_NAME = "youtube-translator-v2";
+    return """const CACHE_NAME = "youtube-translator-v3";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
