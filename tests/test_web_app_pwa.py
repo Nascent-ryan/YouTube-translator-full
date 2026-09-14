@@ -23,8 +23,10 @@ def test_web_app_exposes_pwa_assets() -> None:
 
     sw_response = client.get("/sw.js")
     assert sw_response.status_code == 200
-    assert 'CACHE_NAME = "youtube-translator-v3"' in sw_response.text
+    assert 'CACHE_NAME = "youtube-translator-v4"' in sw_response.text
     assert 'addEventListener("fetch"' in sw_response.text
+    assert "cached || networkResponse" in sw_response.text
+    assert "event.waitUntil(networkResponse" in sw_response.text
 
     assert "youtubei/v1/player" in home_response.text
     assert '"Content-Type": "text/plain;charset=UTF-8"' in home_response.text

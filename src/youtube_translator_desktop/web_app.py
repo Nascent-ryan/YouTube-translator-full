@@ -770,7 +770,7 @@ def _render_manifest() -> str:
 
 
 def _render_service_worker() -> str:
-    return """const CACHE_NAME = "youtube-translator-v3";
+    return """const CACHE_NAME = "youtube-translator-v4";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -803,16 +803,19 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  event.respondWith(
-    fetch(event.request).then((response) => {
-        if (!response || response.status !== 200 || response.type !== "basic") {
-          return response;
-        }
+  const networkResponse = fetch(event.request).then((response) => {
+    if (!response || response.status !== 200 || response.type !== "basic") {
+      return response;
+    }
 
-        const responseToCache = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
-        return response;
-      }).catch(() => caches.match(event.request))
+    const responseToCache = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseToCache));
+    return response;
+  });
+  event.waitUntil(networkResponse.then(() => undefined).catch(() => undefined));
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => cached || networkResponse)
   );
 });"""
 
