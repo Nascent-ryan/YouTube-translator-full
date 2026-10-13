@@ -602,10 +602,51 @@ def _render_page() -> str:
         throw new Error("이 영상에는 사용할 수 있는 자막 트랙이 없습니다.");
       }
 
+      const normalizeLanguage = (languageCode) => String(languageCode || "")
+        .trim()
+        .toLowerCase()
+        .replaceAll("_", "-");
+      const languageFamily = (languageCode) => normalizeLanguage(languageCode).split("-")[0];
+      const findLanguageTrack = (languageCode) => {
+        const normalized = normalizeLanguage(languageCode);
+        const family = languageFamily(normalized);
+        if (!family) return null;
+
+        const candidates = tracks.filter(
+          (candidate) => languageFamily(candidate.languageCode) === family,
+        );
+        candidates.sort((left, right) => {
+          const score = (candidate) => (
+            (candidate.kind !== "asr" ? 100 : 0)
+            + (normalizeLanguage(candidate.languageCode) === normalized ? 10 : 0)
+          );
+          return score(right) - score(left);
+        });
+        return candidates[0] || null;
+      };
+
+      const formats = [
+        ...(player.streamingData?.formats || []),
+        ...(player.streamingData?.adaptiveFormats || []),
+      ];
+      const defaultAudioTrack = formats
+        .map((format) => format.audioTrack)
+        .find((audioTrack) => audioTrack?.audioIsDefault);
+      const audioTrackLanguage = String(defaultAudioTrack?.id || "").split(".")[0];
+      const sourceLanguage = audioTrackLanguage
+        || player.videoDetails?.defaultAudioLanguage
+        || player.microformat?.playerMicroformatRenderer?.defaultAudioLanguage
+        || "";
+      const sourceTrack = findLanguageTrack(sourceLanguage);
+      const englishTrack = findLanguageTrack("en");
       const defaultIndex = (renderer.audioTracks || [])
         .map((audioTrack) => audioTrack.defaultCaptionTrackIndex)
         .find((index) => Number.isInteger(index) && tracks[index]);
-      const track = tracks[defaultIndex] || tracks.find((candidate) => candidate.kind !== "asr") || tracks[0];
+      const track = sourceTrack
+        || englishTrack
+        || tracks[defaultIndex]
+        || tracks.find((candidate) => candidate.kind !== "asr")
+        || tracks[0];
       if (!track?.baseUrl) {
         throw new Error("YouTube 응답에서 자막 주소를 찾지 못했습니다.");
       }
@@ -770,7 +811,7 @@ def _render_manifest() -> str:
 
 
 def _render_service_worker() -> str:
-    return """const CACHE_NAME = "youtube-translator-v4";
+    return """const CACHE_NAME = "youtube-translator-v5";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
